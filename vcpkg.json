@@ -1,0 +1,13 @@
+{
+	"name": "hexane",
+	"version": "0.1.0",
+	"dependencies": [
+		"daxa",
+		"glfw3"
+	],
+	"vcpkg-configuration": {
+		"overlay-ports": [
+			"../Daxa/cmake/vcpkg-port"
+		]
+	}
+}

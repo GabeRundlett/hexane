@@ -1,0 +1,9 @@
+*.vcxproj
+CMakeCache.txt
+*.cmake
+*.sln
+*.filters
+vcpkg_installed/*
+build/*
+vcpkg-manifest-install.log
+CMakeFiles/*
