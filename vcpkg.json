@@ -3,7 +3,8 @@
 	"version": "0.1.0",
 	"dependencies": [
 		"daxa",
-		"glfw3"
+		"glfw3",
+		"glm"
 	],
 	"vcpkg-configuration": {
 		"overlay-ports": [
