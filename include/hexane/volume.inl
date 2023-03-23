@@ -27,6 +27,5 @@ struct Descriptor {
 struct Volume {
     Descriptor descriptor;
     daxa_u32 region_count;
-    daxa_BufferPtr(Region) regions[VOLUME_MAX];
+    Region regions[VOLUME_MAX];
 };
-

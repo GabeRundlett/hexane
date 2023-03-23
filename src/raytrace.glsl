@@ -1,8 +1,7 @@
+#include <hexane/shared.inl>
 #include <daxa/daxa.inl>
 
-#include <hexane/shared.inl>
-
-#if defined(RAYTRACE_VERT) || defineD(RAYTRACE_FRAG)
+#if defined(RAYTRACE_VERT) || defined(RAYTRACE_FRAG)
 layout(push_constant, scalar) uniform Push
 {
     RaytraceDrawPush push;
@@ -24,7 +23,7 @@ layout(
 
 void prepare() {
     deref(push.indirect).vertex_count = 36;
-    deref(push.indirect).instance_count = push.volume.region_count;
+    deref(push.indirect).instance_count = deref(push.volume).region_count;
 }
 
 #elif defined(RAYTRACE_VERT)

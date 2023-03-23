@@ -1,39 +1,43 @@
-#include <hexane/shader.inl>
+#include <hexane/shared.inl>
+
+#include <daxa/daxa.inl>
 
 layout(push_constant, scalar) uniform Push
 {
     CompressorPush push;
 };
 
+#if defined(COMPRESSOR_PALETTIZE) || defined(COMPRESSOR_WRITE)
 layout(
-    local_size_x = AXIS_WORKGROUP_SIZE, 
-    local_size_y = AXIS_WORKGROUP_SIZE, 
-    local_size_z = AXIS_WORKGROUP_SIZE
+    local_size_x = AXIS_CHUNK_SIZE, 
+    local_size_y = AXIS_CHUNK_SIZE, 
+    local_size_z = AXIS_CHUNK_SIZE
 ) in;
-
-#define COMPRESSOR_PRELUDE \
-    daxa_u32vec3 workspace_position = gl_GlobalInvocationID; \
-    daxa_u32vec3 workspace_chunk_position = workspace_position / CHUNK_SIZE; \
-    daxa_u32 workspace_chunk_index = three_d_to_one_d(workspace_chunk_position, WORKSPACE_MAXIMUM); \
-    daxa_u32vec3 workspace_local_position = workspace_position % CHUNK_SIZE; \
-    daxa_u32 workspace_local_index = three_d_to_one_d(workspace_local_position, CHUNK_MAXIMUM); \
-    daxa_u32vec3 region_chunk_position = push_constant.workspace.chunk_positions[workspace_chunk_index]; \
-    daxa_u32 region_chunk_index = three_d_to_one_d(region_chunk_position, REGION_MAXIMUM);
+#else
+layout(
+    local_size_x = 1, 
+    local_size_y = 1, 
+    local_size_z = 1
+) in;
+#endif
 
 #define COMPRESSOR_BITS \
-    u32 u32_bits = 32; \
-    u32 index_bits = ceil_log2(deref(push_constant.region).chunks[region_chunk_index].palette_count);
+    daxa_u32 u32_bits = 32; \
+    daxa_u32 index_bits = daxa_u32(ceil(log2(daxa_f32(deref(push.volume).regions[0].chunks[region_chunk_index].palette_count))));
 
-#define COMPRESSOR_LOAD_INFORMATION u32 information = imageLoad(push_constant.workspace.image, workspace_position);
+#define COMPRESSOR_LOAD_INFORMATION daxa_u32 information = imageLoad(push.workspace, daxa_i32vec3(workspace_position)).r;
 
-void palettize() {
-    COMPRESSOR_PRELUDE
+#ifdef COMPRESSOR_PALETTIZE
+
+void main() {
+    WORKSPACE_PRELUDE
 
     COMPRESSOR_LOAD_INFORMATION
 
-    for(u32 palette_id = 0; palette_id < MAX_PALETTES; palette_id++) {
-        u32 old_information = atomicCompareExchange(
-            deref(push_constant.region)
+    for(daxa_u32 palette_id = 0; palette_id < PALETTES_SIZE; palette_id++) {
+        daxa_u32 old_information = atomicCompSwap(
+            deref(push.volume)
+                .regions[0]
                 .chunks[region_chunk_index]
                 .palettes[palette_id]
                 .information,
@@ -41,54 +45,57 @@ void palettize() {
             information
         );
 
-        if old_information == VOID {
+        if(old_information == VOID) {
             atomicAdd(
-                deref(push_constant.region)
+                deref(push.volume)
+                    .regions[0]
                     .chunks[region_chunk_index]
                     .palette_count,
                 1
             );
         }
 
-        u32 current_information = atomicLoad(
-            deref(push_constant.region)
+        daxa_u32 current_information = 
+            deref(push.volume)
+                .regions[0]
                 .chunks[region_chunk_index]
                 .palettes[palette_id]
-                .information
-        );
+                .information;
 
-        if current_information == information {
+        if(current_information == information) {
             break;
         }
     }    
 }
-
-void allocate() {
-    COMPRESSOR_PRELUDE
+#elif defined(COMPRESSOR_ALLOCATE)
+void main() {
+    ALLOCATOR_PRELUDE
 
     COMPRESSOR_BITS
 
-    u32 blob_size = u32(
+    daxa_u32 blob_size = daxa_u32(
         ceil(
-            f32(CHUNK_SIZE)
-            * f32(index_bits)
-            / f32(u32_bits)  
+            daxa_f32(CHUNK_SIZE)
+            * daxa_f32(index_bits)
+            / daxa_f32(u32_bits)  
         )
     );
 
-    deref(push_constant.region)
+    deref(push.volume)
+        .regions[0]
         .chunks[region_chunk_index]
-        .heap_offset = shader_malloc(blob_size);
+        .heap_offset = shader_malloc(push.heap, blob_size);
 }
-
-void write() {
-    COMPRESSOR_PRELUDE
+#elif defined(COMPRESSOR_WRITE)
+void main() {
+    WORKSPACE_PRELUDE
 
     COMPRESSOR_BITS
 
     COMPRESSOR_LOAD_INFORMATION
 
-    u32 palette_count = deref(push_constant.region)
+    daxa_u32 palette_count = deref(push.volume)
+        .regions[0]
         .chunks[region_chunk_index]
         .palette_count;
     
@@ -96,11 +103,12 @@ void write() {
         return;
     }
 
-    u32 palette_id = 0;
+    daxa_u32 palette_id = 0;
 
     for(; palette_id < palette_count; palette_id++) {
-		u32 palette_information =
-            deref(push_constant.region)
+		daxa_u32 palette_information =
+            deref(push.volume)
+                .regions[0]
                 .chunks[region_chunk_index]
                 .palettes[palette_id]
                 .information;
@@ -110,13 +118,13 @@ void write() {
 		}
 	}
 
-    for(u32 bit = 0; bit < index_bits; bit++) {
-        u32 bit_index = workspace_local_index * index_bits
+    for(daxa_u32 bit = 0; bit < index_bits; bit++) {
+        daxa_u32 bit_index = workspace_local_index * index_bits
             + bit
-            + u32_bits * deref(push_constant.region).chunks[region_chunk_index].heap_offset;
-        u32 heap_offset = bit_index / u32_bits;
-        u32 bit_offset = bit_index % u32_bits;
-        u32 bit = (palette_id >> bit) & 1;
-        atomicOr(deref(push_constant.heap).data[heap_offset], bit << bit_offset);             
+            + u32_bits * deref(push.volume).regions[0].chunks[region_chunk_index].heap_offset;
+        daxa_u32 heap_offset = bit_index / u32_bits;
+        daxa_u32 bit_offset = bit_index % u32_bits;
+        atomicOr(deref(push.heap).data[heap_offset], ((palette_id >> bit) & 1) << bit_offset);             
     }
 }
+#endif

@@ -2,6 +2,7 @@
 #include <daxa/utils/pipeline_manager.hpp>
 #include <iostream>
 #include <span>
+#include <variant>
 #include <daxa/utils/task_list.hpp>
 #include <daxa/utils/math_operators.hpp>
 
@@ -65,6 +66,18 @@ void upload_perframe_task(
     daxa::CommandList & cmd_list,
     daxa::BufferId buffer_id,
     Perframe perframe
+);
+void gencomp_task(
+    daxa::Device & device,
+    daxa::CommandList & cmd_list,
+    std::shared_ptr<daxa::ComputePipeline> & queue_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & brush_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & compressor_palettize_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & compressor_allocate_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & compressor_write_pipeline,
+    daxa::BufferId volume_id,
+    daxa::BufferId heap_id,
+    daxa::ImageId workspace_id
 );
 
 int main()
@@ -144,7 +157,7 @@ int main()
             .fragment_shader_info = {.source = daxa::ShaderFile{"raytrace.glsl"}, .compile_options = {.defines = {daxa::ShaderDefine{"RAYTRACE_FRAG"}}}},
             .color_attachments = {{.format = swapchain.get_format()}},
             .raster = {},
-            .push_constant_size = sizeof(RaytracePush),
+            .push_constant_size = sizeof(RaytraceDrawPush),
             .debug_name = "my pipeline",
         });
         if (result.is_err())
@@ -155,12 +168,104 @@ int main()
         pipeline = result.value();
     }
 
+    std::shared_ptr<daxa::ComputePipeline> queue_pipeline;
+    {
+        auto result = pipeline_manager.add_compute_pipeline({
+            .shader_info = {.source = daxa::ShaderFile{"queue.glsl"}},
+            .push_constant_size = sizeof(QueuePush),
+            .debug_name = "queue_pipeline",
+        });
+        if (result.is_err())
+        {
+            std::cerr << result.message() << std::endl;
+            return -1;
+        }
+        queue_pipeline = result.value();
+    }
+
+    std::shared_ptr<daxa::ComputePipeline> brush_pipeline;
+    {
+        auto result = pipeline_manager.add_compute_pipeline({
+            .shader_info = {.source = daxa::ShaderFile{"base_terrain.glsl"}},
+            .push_constant_size = sizeof(BrushPush),
+            .debug_name = "brush_pipeline",
+        });
+        if (result.is_err())
+        {
+            std::cerr << result.message() << std::endl;
+            return -1;
+        }
+        brush_pipeline = result.value();
+    }
+    
+    std::shared_ptr<daxa::ComputePipeline> compressor_palettize_pipeline;
+    {
+        auto result = pipeline_manager.add_compute_pipeline({
+            .shader_info = {.source = daxa::ShaderFile{"compressor.glsl"}, .compile_options = {.defines = {daxa::ShaderDefine{"COMPRESSOR_PALETTIZE"}}}},
+            .push_constant_size = sizeof(CompressorPush),
+            .debug_name = "compressor_palettize_pipeline",
+        });
+        if (result.is_err())
+        {
+            std::cerr << result.message() << std::endl;
+            return -1;
+        }
+        compressor_palettize_pipeline = result.value();
+    }
+
+    std::shared_ptr<daxa::ComputePipeline> compressor_allocate_pipeline;
+    {
+        auto result = pipeline_manager.add_compute_pipeline({
+            .shader_info = {.source = daxa::ShaderFile{"compressor.glsl"}, .compile_options = {.defines = {daxa::ShaderDefine{"COMPRESSOR_ALLOCATE"}}}},
+            .push_constant_size = sizeof(CompressorPush),
+            .debug_name = "compressor_allocate_pipeline",
+        });
+        if (result.is_err())
+        {
+            std::cerr << result.message() << std::endl;
+            return -1;
+        }
+        compressor_allocate_pipeline = result.value();
+    }
+
+    std::shared_ptr<daxa::ComputePipeline> compressor_write_pipeline;
+    {
+        auto result = pipeline_manager.add_compute_pipeline({
+            .shader_info = {.source = daxa::ShaderFile{"compressor.glsl"}, .compile_options = {.defines = {daxa::ShaderDefine{"COMPRESSOR_WRITE"}}}},
+            .push_constant_size = sizeof(CompressorPush),
+            .debug_name = "compressor_write_pipeline",
+        });
+        if (result.is_err())
+        {
+            std::cerr << result.message() << std::endl;
+            return -1;
+        }
+        compressor_write_pipeline = result.value();
+    }
+
     //TODO Create buffers
     auto perframe_buffer = device.create_buffer({
         .size = sizeof(Perframe),
-        .debug_name = "my vertex data",
+        .debug_name = "perframe",
     });
 
+    auto volume_buffer = device.create_buffer({
+        .size = sizeof(Volume),
+        .debug_name = "volume",
+    });
+
+    auto heap_buffer = device.create_buffer({
+        .size = sizeof(Heap),
+        .debug_name = "heap",
+    });
+
+    auto workspace_image = device.create_image({
+            .format = daxa::Format::R32_UINT,
+            .size = {AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE, AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE, AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE},
+            .usage = daxa::ImageUsageFlagBits::SHADER_READ_WRITE,
+            .debug_name = "workspace",
+        });
+    
     auto loop_task_list = daxa::TaskList({
         .device = device,
         .swapchain = swapchain,
@@ -168,15 +273,75 @@ int main()
     });
 
     auto task_swapchain_image = loop_task_list.create_task_image({.swapchain_image = true, .debug_name = "my task swapchain image"});
-
     auto swapchain_image = daxa::ImageId{};
-
     loop_task_list.add_runtime_image(task_swapchain_image, swapchain_image);
 
     auto task_perframe_buffer = loop_task_list.create_task_buffer({.initial_access = daxa::AccessConsts::VERTEX_SHADER_READ, .debug_name = "my task buffer"});
     loop_task_list.add_runtime_buffer(task_perframe_buffer, perframe_buffer);
 
+    auto task_volume_buffer = loop_task_list.create_task_buffer({.initial_access = daxa::AccessConsts::COMPUTE_SHADER_READ, .debug_name = "my task buffer"});
+    loop_task_list.add_runtime_buffer(task_volume_buffer, volume_buffer);
+
+    auto task_heap_buffer = loop_task_list.create_task_buffer({.initial_access = daxa::AccessConsts::COMPUTE_SHADER_READ, .debug_name = "my task buffer"});
+    loop_task_list.add_runtime_buffer(task_heap_buffer, heap_buffer);
+
+    auto task_workspace_image = loop_task_list.create_task_image({.debug_name = "my task swapchain image"});
+    loop_task_list.add_runtime_image(task_workspace_image, workspace_image);
+
     Perframe perframe;
+
+    loop_task_list.add_task({
+        .used_buffers = {
+            {task_volume_buffer, daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
+            {task_heap_buffer, daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE}
+        },
+        .used_images = {
+            {task_workspace_image, daxa::TaskImageAccess::COMPUTE_SHADER_READ_WRITE, daxa::ImageMipArraySlice{}},
+        },
+        .task = [
+            task_volume_buffer, 
+            task_heap_buffer, 
+            task_workspace_image,
+            &queue_pipeline,
+            &brush_pipeline,
+            &compressor_palettize_pipeline,
+            &compressor_allocate_pipeline,
+            &compressor_write_pipeline
+        ](daxa::TaskRuntimeInterface task_runtime)
+        {
+            auto cmd_list = task_runtime.get_command_list();
+            
+            gencomp_task(
+                task_runtime.get_device(), cmd_list, 
+                queue_pipeline,
+                brush_pipeline,
+                compressor_palettize_pipeline,
+                compressor_allocate_pipeline,
+                compressor_write_pipeline,
+                task_runtime.get_buffers(task_volume_buffer)[0],
+                task_runtime.get_buffers(task_heap_buffer)[0], 
+                task_runtime.get_images(task_workspace_image)[0]
+            );
+        },
+        .debug_name = "my draw task",
+    });
+
+    loop_task_list.add_task({
+        .used_buffers = {
+            {task_perframe_buffer, daxa::TaskBufferAccess::TRANSFER_WRITE}
+        },
+        .task = [task_perframe_buffer, &perframe](daxa::TaskRuntimeInterface task_runtime)
+        {
+            auto cmd_list = task_runtime.get_command_list();
+            
+            upload_perframe_task(
+                task_runtime.get_device(), cmd_list, 
+                task_runtime.get_buffers(task_perframe_buffer)[0], 
+                perframe
+            );
+        },
+        .debug_name = "my draw task",
+    });
 
     loop_task_list.add_task({
         .used_buffers = {
@@ -334,6 +499,11 @@ int main()
     }
 
     device.wait_idle();
+    device.destroy_buffer(perframe_buffer);
+    device.destroy_buffer(volume_buffer);
+    device.destroy_buffer(heap_buffer);
+    device.destroy_image(workspace_image);
+    device.collect_garbage();
 }
 
 void raytrace_task(
@@ -357,7 +527,7 @@ void raytrace_task(
     
     cmd_list.set_pipeline(*pipeline);
 
-    cmd_list.push_constant(RaytracePush{
+    cmd_list.push_constant(RaytraceDrawPush{
         .perframe = device.get_device_address(perframe_buffer),
     });
     
@@ -387,4 +557,66 @@ void upload_perframe_task(
         .dst_buffer = buffer_id,
         .size = sizeof(Perframe),
     });
+}
+
+void gencomp_task(
+    daxa::Device & device,
+    daxa::CommandList & cmd_list,
+    std::shared_ptr<daxa::ComputePipeline> & queue_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & brush_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & compressor_palettize_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & compressor_allocate_pipeline,
+    std::shared_ptr<daxa::ComputePipeline> & compressor_write_pipeline,
+    daxa::BufferId volume_id,
+    daxa::BufferId heap_id,
+    daxa::ImageId workspace_id
+) {
+    auto specs_buffer = device.create_buffer({
+        .size = sizeof(Specs),
+        .debug_name = "specs",
+    });
+
+    cmd_list.clear_image({
+        .clear_value = std::array<daxa_u32, 4>({0, 0, 0, 0}),
+        .dst_image = workspace_id
+    });
+
+    cmd_list.set_pipeline(*queue_pipeline);
+    cmd_list.push_constant(QueuePush {
+        .volume = device.get_device_address(volume_id),
+        .specs = device.get_device_address(specs_buffer),
+    });
+    cmd_list.dispatch(1,1,1);
+
+    cmd_list.set_pipeline(*brush_pipeline);
+    cmd_list.push_constant(BrushPush {
+        .workspace = workspace_id,
+        .specs = device.get_device_address(specs_buffer),
+    });
+    cmd_list.dispatch(
+        AXIS_WORKSPACE_SIZE,   
+        AXIS_WORKSPACE_SIZE,
+        AXIS_WORKSPACE_SIZE
+    );
+
+    CompressorPush compressor_push = {
+        .workspace = workspace_id,
+        .specs = device.get_device_address(specs_buffer),
+        .volume = device.get_device_address(volume_id),
+        .heap = device.get_device_address(heap_id)
+    };
+
+    cmd_list.set_pipeline(*compressor_palettize_pipeline);
+    cmd_list.push_constant(compressor_push);
+    //cmd_list.dispatch(AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE);
+
+    cmd_list.set_pipeline(*compressor_allocate_pipeline);
+    cmd_list.push_constant(compressor_push);
+    //cmd_list.dispatch(AXIS_WORKSPACE_SIZE,AXIS_WORKSPACE_SIZE,AXIS_WORKSPACE_SIZE);
+
+    cmd_list.set_pipeline(*compressor_write_pipeline);
+    cmd_list.push_constant(compressor_push);
+    //cmd_list.dispatch(AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE);
+
+    cmd_list.destroy_buffer_deferred(specs_buffer);
 }
