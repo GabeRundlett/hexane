@@ -1,3 +1,4 @@
+
 #include <hexane/shared.inl>
 
 #include <daxa/daxa.inl>
@@ -54,13 +55,20 @@ void main() {
                 1
             );
         }
+ 
+        if(old_information == information) {
+            break;
+        }
 
-        daxa_u32 current_information = 
+        //This was atomicLoad in wgsl. Not sure if this is nessesary
+        daxa_u32 current_information = atomicAdd(
             deref(push.volume)
                 .regions[0]
                 .chunks[region_chunk_index]
                 .palettes[palette_id]
-                .information;
+                .information, 
+            0
+        );
 
         if(current_information == information) {
             break;
@@ -68,6 +76,9 @@ void main() {
     }    
 }
 #elif defined(COMPRESSOR_ALLOCATE)
+
+#include <hexane/allocator.inl>
+
 void main() {
     ALLOCATOR_PRELUDE
 
@@ -84,7 +95,7 @@ void main() {
     deref(push.volume)
         .regions[0]
         .chunks[region_chunk_index]
-        .heap_offset = shader_malloc(push.heap, blob_size);
+        .heap_offset = shader_malloc(blob_size);
 }
 #elif defined(COMPRESSOR_WRITE)
 void main() {

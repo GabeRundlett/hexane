@@ -2,7 +2,7 @@
 
 #include <daxa/daxa.inl>
 #include <hexane/volume.inl>
-#include <hexane/allocator.inl>
+#include <hexane/heap.inl>
 #include <hexane/perframe.inl>
 #include <hexane/specs.inl>
 #include <hexane/indirect.inl>

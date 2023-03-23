@@ -14,9 +14,3 @@ struct DispatchIndirect {
     daxa_u32    y;
     daxa_u32    z;
 };
-
-struct CompressorIndirect {
-    DispatchIndirect palettize;
-    DispatchIndirect allocate;
-    DispatchIndirect write;
-};

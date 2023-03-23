@@ -608,15 +608,15 @@ void gencomp_task(
 
     cmd_list.set_pipeline(*compressor_palettize_pipeline);
     cmd_list.push_constant(compressor_push);
-    //cmd_list.dispatch(AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE);
+    cmd_list.dispatch(AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE);
 
     cmd_list.set_pipeline(*compressor_allocate_pipeline);
     cmd_list.push_constant(compressor_push);
-    //cmd_list.dispatch(AXIS_WORKSPACE_SIZE,AXIS_WORKSPACE_SIZE,AXIS_WORKSPACE_SIZE);
+    cmd_list.dispatch(AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE);
 
     cmd_list.set_pipeline(*compressor_write_pipeline);
     cmd_list.push_constant(compressor_push);
-    //cmd_list.dispatch(AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE,AXIS_WORKSPACE_SIZE * AXIS_CHUNK_SIZE);
-
+    cmd_list.dispatch(AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE);
+    
     cmd_list.destroy_buffer_deferred(specs_buffer);
 }
