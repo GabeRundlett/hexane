@@ -35,6 +35,10 @@ void main() {
 
     COMPRESSOR_LOAD_INFORMATION
 
+    if(information == VOID) {
+            return;
+    }
+
     for(daxa_u32 palette_id = 0; palette_id < PALETTES_SIZE; palette_id++) {
         daxa_u32 old_information = atomicCompSwap(
             deref(push.volume)
@@ -54,10 +58,6 @@ void main() {
                     .palette_count,
                 1
             );
-        }
- 
-        if(old_information == information) {
-            break;
         }
 
         //This was atomicLoad in wgsl. Not sure if this is nessesary
