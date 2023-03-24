@@ -20,12 +20,12 @@ struct Region {
     Chunk chunks[REGION_SIZE];
 };
 
-struct Descriptor {
+struct VolumeDescriptor {
     daxa_u32 seed;
 };
 
 struct Volume {
-    Descriptor descriptor;
+    VolumeDescriptor descriptor;
     daxa_u32 region_count;
     Region regions[VOLUME_MAX];
 };

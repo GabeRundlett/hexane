@@ -1,4 +1,6 @@
 
+#extension GL_EXT_debug_printf : require
+
 #include <hexane/shared.inl>
 
 #include <daxa/daxa.inl>
@@ -49,7 +51,7 @@ void main() {
             VOID,
             information
         );
-
+        
         if(old_information == VOID) {
             atomicAdd(
                 deref(push.volume)
@@ -60,15 +62,11 @@ void main() {
             );
         }
 
-        //This was atomicLoad in wgsl. Not sure if this is nessesary
-        daxa_u32 current_information = atomicAdd(
-            deref(push.volume)
+        daxa_u32 current_information = deref(push.volume)
                 .regions[0]
                 .chunks[region_chunk_index]
                 .palettes[palette_id]
-                .information, 
-            0
-        );
+                .information;
 
         if(current_information == information) {
             break;

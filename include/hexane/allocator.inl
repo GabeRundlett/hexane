@@ -7,7 +7,8 @@ daxa_u32 shader_malloc(daxa_u32 size) {
     //SIZE as the beginning
     deref(push.heap).data[result_address] = size + 2;
     //DEADBEEF at the end
-    deref(push.heap).data[result_address + size] = 3735928559;
+    deref(push.heap).data[result_address + size + 1] = 3735928559;
+
     return result_address + 1;
 }
 

@@ -23,11 +23,11 @@ void main() {
     for(daxa_u32 i = 0; i < WORKSPACE_SIZE; i++) {
         daxa_u32 chunk_index;
 
-        if(deref(push.volume).regions[region_index].chunk_count >= REGION_SIZE - 1) {
-            //TODO do more regions
+        if(deref(push.volume).regions[region_index].chunk_count >= REGION_SIZE) {
             break;
         } else {
-            chunk_index = deref(push.volume).regions[region_index].chunk_count++;
+            chunk_index = deref(push.volume).regions[region_index].chunk_count;
+            deref(push.volume).regions[region_index].chunk_count++;
         }
 
         daxa_u32vec3 origin = one_d_to_three_d(chunk_index, REGION_MAXIMUM);

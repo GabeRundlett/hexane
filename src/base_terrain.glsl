@@ -29,7 +29,7 @@ daxa_u32 world_gen_base(daxa_i32vec3 position) {
         frequency
     )), 0.0, 1.0);
 
-    daxa_f32 height_offset = 60;
+    daxa_f32 height_offset = 10;
     daxa_f32 squashing_factor = 0.05;
 
     daxa_f32 density = alpha;
@@ -39,7 +39,7 @@ daxa_u32 world_gen_base(daxa_i32vec3 position) {
     if(density > 0.0) {
         return BLOCK_ID_STONE;
     }
-
+ 
     return BLOCK_ID_AIR;
 }
 
@@ -51,9 +51,12 @@ layout(
 
 void main() {
     WORKSPACE_PRELUDE
-    
-    daxa_i32vec3 position = daxa_i32vec3(workspace_position)
-        + daxa_i32vec3(deref(push.specs).spec[workspace_chunk_index].origin);
+
+    if(workspace_chunk_index >= deref(push.specs).spec_count) {
+        return;
+    }
+
+    daxa_i32vec3 position = daxa_i32vec3(workspace_local_position) + AXIS_CHUNK_SIZE * daxa_i32vec3(region_chunk_position);
 
     imageStore(push.workspace, daxa_i32vec3(workspace_position), daxa_u32vec4(
         world_gen_base(position)

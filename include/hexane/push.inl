@@ -33,6 +33,7 @@ struct CompressorPush {
 struct RaytraceDrawPush {
      daxa_BufferPtr(Volume) volume;
      daxa_BufferPtr(Perframe) perframe;
+     daxa_BufferPtr(Heap) heap;
 };
 
 struct RaytracePreparePush {
