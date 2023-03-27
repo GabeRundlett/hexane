@@ -15,6 +15,10 @@
                     // it gets resolved by CMake Tools:
                     "name": "PATH",
                     "value": "${env:PATH}:${command:cmake.getLaunchTargetDirectory}"
+                },
+                {
+                    "name": "DCMAKE_TOOLCHAIN_FILE",
+                    "value": "C:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake"
                 }
             ],
             "console": "externalTerminal"    

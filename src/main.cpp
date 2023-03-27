@@ -3,6 +3,7 @@
 #include <daxa/utils/math_operators.hpp>
 #include <daxa/utils/pipeline_manager.hpp>
 #include <daxa/utils/task_list.hpp>
+#include <daxa/utils/fsr2.hpp>
 #include <iostream>
 #include <span>
 #include <variant>
@@ -101,6 +102,7 @@ void compressor_write_task(
     daxa::ImageId workspace_id);
 void clear_workspace_task(daxa::Device &device, daxa::CommandList &cmd_list,
                           daxa::ImageId workspace_id);
+void create_images(daxa::Device &device, daxa::u32 width, daxa::u32 height, daxa::ImageId &color_image, daxa::ImageId &depth_image, daxa::ImageId &motion_vectors_image);
 
 static bool locked = false;
 static bool skip = true;
@@ -194,6 +196,16 @@ int main() {
       .debug_name = "my swapchain",
   });
 
+    daxa::Fsr2Context fsr2_context(daxa::UpscaleContextInfo {
+        .device = device,
+        .size_info = {
+            .render_size_x = window_info.width / PREPASS_SCALE,
+            .render_size_y = window_info.height / PREPASS_SCALE,
+            .display_size_x = window_info.width,
+            .display_size_y = window_info.height,
+        }
+    });
+
   auto pipeline_manager = daxa::PipelineManager({
       .device = device,
       .shader_compile_options =
@@ -210,13 +222,9 @@ int main() {
       .debug_name = "my pipeline manager",
   });
 
-daxa::ImageId depth_image = device.create_image({
-        .format = daxa::Format::D24_UNORM_S8_UINT,
-        .aspect = daxa::ImageAspectFlagBits::DEPTH | daxa::ImageAspectFlagBits::STENCIL,
-        .size = {window_info.width, window_info.height, 1},
-        .usage = daxa::ImageUsageFlagBits::DEPTH_STENCIL_ATTACHMENT,
-    });
-     
+    daxa::ImageId color_image, depth_image, motion_vectors_image;
+
+    create_images(device, window_info.width / PREPASS_SCALE, window_info.height / PREPASS_SCALE, color_image, depth_image, motion_vectors_image);
    
 
   std::shared_ptr<daxa::RasterPipeline> raytrace_front_pipeline;
@@ -497,6 +505,14 @@ auto unispecs_buffer = device.create_buffer({
       {.swapchain_image = true, .debug_name = "my task swapchain image"});
   auto swapchain_image = daxa::ImageId{};
   loop_task_list.add_runtime_image(task_swapchain_image, swapchain_image);
+
+  auto task_color_image = loop_task_list.create_task_image(
+      {.debug_name = "my task swapchain image"});
+  loop_task_list.add_runtime_image(task_color_image, color_image);
+
+  auto task_motion_vectors_image = loop_task_list.create_task_image(
+      {.debug_name = "my task swapchain image"});
+  loop_task_list.add_runtime_image(task_motion_vectors_image, motion_vectors_image);
 
   auto task_perframe_buffer = loop_task_list.create_task_buffer(
       {.initial_access = daxa::AccessConsts::VERTEX_SHADER_READ,
@@ -826,11 +842,13 @@ auto unispecs_buffer = device.create_buffer({
            {task_indirect_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY}},
       .used_images =
           {
-              {task_swapchain_image, daxa::TaskImageAccess::COLOR_ATTACHMENT,
+              {task_color_image, daxa::TaskImageAccess::COLOR_ATTACHMENT,
+               daxa::ImageMipArraySlice{}},
+               {task_depth_image, daxa::TaskImageAccess::DEPTH_STENCIL_ATTACHMENT,
                daxa::ImageMipArraySlice{}},
           },
       .task =
-          [task_swapchain_image, task_regions_buffer,task_perframe_buffer, task_indirect_buffer, task_depth_image,
+          [task_color_image, task_regions_buffer,task_perframe_buffer, task_indirect_buffer, task_depth_image,
            task_raytrace_specs_buffer, task_allocator_buffer, &raytrace_front_pipeline,
            &window_info](daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
@@ -843,9 +861,9 @@ auto unispecs_buffer = device.create_buffer({
                 task_runtime.get_buffers(task_perframe_buffer)[0],
                 task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
                 task_runtime.get_buffers(task_allocator_buffer)[0],
-                task_runtime.get_images(task_swapchain_image)[0],
+                task_runtime.get_images(task_color_image)[0],
                 task_runtime.get_images(task_depth_image)[0],
-                window_info.width, window_info.height);
+                window_info.width / PREPASS_SCALE, window_info.height / PREPASS_SCALE);
           },
       .debug_name = "my draw task",
   });
@@ -905,11 +923,13 @@ auto unispecs_buffer = device.create_buffer({
            {task_indirect_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY}},
       .used_images =
           {
-              {task_swapchain_image, daxa::TaskImageAccess::COLOR_ATTACHMENT,
+              {task_color_image, daxa::TaskImageAccess::COLOR_ATTACHMENT,
+               daxa::ImageMipArraySlice{}},
+            {task_depth_image, daxa::TaskImageAccess::DEPTH_STENCIL_ATTACHMENT,
                daxa::ImageMipArraySlice{}},
           },
       .task =
-          [task_swapchain_image, task_regions_buffer,task_perframe_buffer, task_indirect_buffer, task_depth_image,
+          [task_color_image, task_regions_buffer,task_perframe_buffer, task_indirect_buffer, task_depth_image,
            task_raytrace_specs_buffer, task_allocator_buffer, &raytrace_back_pipeline,
            &window_info](daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
@@ -922,14 +942,47 @@ auto unispecs_buffer = device.create_buffer({
                 task_runtime.get_buffers(task_perframe_buffer)[0],
                 task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
                 task_runtime.get_buffers(task_allocator_buffer)[0],
-                task_runtime.get_images(task_swapchain_image)[0],
+                task_runtime.get_images(task_color_image)[0],
                 task_runtime.get_images(task_depth_image)[0],
-                window_info.width, window_info.height);
+                window_info.width / PREPASS_SCALE, window_info.height / PREPASS_SCALE);
           },
       .debug_name = "my draw task",
   });
 
+  daxa_f32 delta_time = 0.0;
 
+loop_task_list.add_task({
+      .used_images =
+          {
+              {task_color_image, daxa::TaskImageAccess::SHADER_READ_ONLY,
+               daxa::ImageMipArraySlice{}},
+            {task_depth_image, daxa::TaskImageAccess::SHADER_READ_ONLY,
+               daxa::ImageMipArraySlice{}},
+               {task_motion_vectors_image, daxa::TaskImageAccess::SHADER_READ_ONLY,
+               daxa::ImageMipArraySlice{}},
+                {task_swapchain_image, daxa::TaskImageAccess::SHADER_READ_WRITE,
+               daxa::ImageMipArraySlice{}},
+          },
+      .task =
+          [&fsr2_context, &delta_time, task_color_image, task_depth_image, task_swapchain_image, task_motion_vectors_image, &window_info](daxa::TaskRuntimeInterface task_runtime) {
+            auto cmd_list = task_runtime.get_command_list();
+
+            fsr2_context.upscale(cmd_list, {
+                .color = task_runtime.get_images(task_color_image)[0],
+                .depth = task_runtime.get_images(task_depth_image)[0],
+                .motion_vectors = task_runtime.get_images(task_motion_vectors_image)[0],
+                .output = task_runtime.get_images(task_swapchain_image)[0],
+                .delta_time = delta_time,
+                .jitter = 0.0,
+                .camera_info = {
+                    .near_plane = 0.1,
+                    .far_plane = 100.0,
+                    .vertical_fov = glm::pi<float>() * 0.25f,
+                },
+            });
+          },
+      .debug_name = "my draw task",
+  });
 
   auto submit_info = daxa::CommandSubmitInfo{};
   loop_task_list.submit(&submit_info);
@@ -943,7 +996,6 @@ auto unispecs_buffer = device.create_buffer({
   std::chrono::milliseconds last_tick =
       duration_cast<std::chrono::milliseconds>(
           std::chrono::system_clock::now().time_since_epoch());
-  daxa_f32 delta_time = 0.0;
 
   while (true) {
     std::chrono::milliseconds current_tick =
@@ -1040,14 +1092,17 @@ auto unispecs_buffer = device.create_buffer({
 
     if (window_info.swapchain_out_of_date) {
         loop_task_list.remove_runtime_image(task_depth_image, depth_image);
+        device.destroy_image(color_image);
         device.destroy_image(depth_image);
-            depth_image = device.create_image({
-                .format = daxa::Format::D24_UNORM_S8_UINT,
-                .aspect = daxa::ImageAspectFlagBits::DEPTH | daxa::ImageAspectFlagBits::STENCIL,
-                .size = {window_info.width, window_info.height, 1},
-                .usage = daxa::ImageUsageFlagBits::DEPTH_STENCIL_ATTACHMENT,
-            });
-            loop_task_list.add_runtime_image(task_depth_image, depth_image);
+        device.destroy_image(motion_vectors_image);
+        create_images(device, window_info.width / PREPASS_SCALE, window_info.height / PREPASS_SCALE, color_image, depth_image, motion_vectors_image);
+        fsr2_context.resize({
+            .render_size_x = window_info.width / PREPASS_SCALE,
+            .render_size_y = window_info.height / PREPASS_SCALE,
+            .display_size_x = window_info.width,
+            .display_size_y = window_info.height,
+        });
+        loop_task_list.add_runtime_image(task_depth_image, depth_image);
       swapchain.resize();
       window_info.swapchain_out_of_date = false;
     }
@@ -1074,6 +1129,30 @@ auto unispecs_buffer = device.create_buffer({
   device.destroy_image(workspace_image);
   device.destroy_image(depth_image);
   device.collect_garbage();
+}
+
+void create_images(daxa::Device &device, daxa::u32 width, daxa::u32 height, daxa::ImageId &color_image, daxa::ImageId &depth_image, daxa::ImageId &motion_vectors_image) {
+    color_image = device.create_image({
+        .format = daxa::Format::R8G8B8A8_UNORM,
+        .aspect = daxa::ImageAspectFlagBits::COLOR,
+        .size = {width, height, 1},
+        .usage = daxa::ImageUsageFlagBits::COLOR_ATTACHMENT,
+    });
+
+    depth_image = device.create_image({
+        .format = daxa::Format::D24_UNORM_S8_UINT,
+        .aspect = daxa::ImageAspectFlagBits::DEPTH | daxa::ImageAspectFlagBits::STENCIL,
+        .size = {width, height, 1},
+        .usage = daxa::ImageUsageFlagBits::DEPTH_STENCIL_ATTACHMENT,
+    });
+    
+    motion_vectors_image = device.create_image({
+        .format = daxa::Format::R8G8B8A8_UNORM,
+        .aspect = daxa::ImageAspectFlagBits::COLOR,
+        .size = {width, height, 1},
+        .usage = daxa::ImageUsageFlagBits::COLOR_ATTACHMENT,
+    });
+     
 }
 
 void raytrace_prepare_task(
