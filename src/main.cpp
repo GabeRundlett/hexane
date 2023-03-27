@@ -55,40 +55,49 @@ struct WindowInfo {
 
 #include <hexane/shared.inl>
 
+void upload_allocator_task(daxa::Device &device, daxa::CommandList &cmd_list,
+                          daxa::BufferId buffer_id, daxa::BufferDeviceAddress heap_id);
+void upload_regions_task(daxa::Device &device, daxa::CommandList &cmd_list,
+                          daxa::BufferId buffer_id, daxa::BufferDeviceAddress regions_id);
 void raytrace_prepare_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &prepare_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId write_indirect_id);
+    daxa::BufferId regions_id, daxa::BufferId perframe_id, daxa::BufferId volume_id,  daxa::BufferId raytrace_specs_id, daxa::BufferId write_indirect_id) ;
 void raytrace_draw_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::RasterPipeline> &raytrace_pipeline,
-    daxa::BufferId indirect_id, daxa::BufferId perframe_id,
-    daxa::BufferId volume_id, daxa::BufferId heap_id,
-    daxa::ImageId swapchain_image, daxa::u32 width, daxa::u32 height);
+    daxa::AttachmentLoadOp load_op,
+    daxa::BufferId regions_id, daxa::BufferId indirect_id, daxa::BufferId perframe_id,
+    daxa::BufferId raytrace_specs_id,  daxa::BufferId allocator_id,
+    daxa::ImageId swapchain_image, daxa::ImageId depth_image, daxa::u32 width, daxa::u32 height);
 void upload_perframe_task(daxa::Device &device, daxa::CommandList &cmd_list,
                           daxa::BufferId buffer_id, Perframe perframe);
 void queue_task(daxa::Device &device, daxa::CommandList &cmd_list,
                 std::shared_ptr<daxa::ComputePipeline> &queue_pipeline,
-                daxa::BufferId volume_id, daxa::BufferId heap_id,
-                daxa::BufferId specs_id, daxa::ImageId workspace_id);
+                daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id,
+                daxa::BufferId specs_id,daxa::BufferId unispecs_id);
 void brush_task(daxa::Device &device, daxa::CommandList &cmd_list,
                 std::shared_ptr<daxa::ComputePipeline> &brush_pipeline,
-                daxa::BufferId volume_id, daxa::BufferId heap_id,
+                daxa::BufferId volume_id, daxa::BufferId allocator_id,
+                daxa::BufferId specs_id, daxa::ImageId workspace_id);
+void uniformity_task(daxa::Device &device, daxa::CommandList &cmd_list,
+                const std::shared_ptr<daxa::ComputePipeline>* uniformity_pipelines,
+                daxa::BufferId regions_id, daxa::BufferId unispecs_id, daxa::BufferId allocator_id,
                 daxa::BufferId specs_id, daxa::ImageId workspace_id);
 void compressor_palettize_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &compressor_palettize_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId heap_id, daxa::BufferId specs_id,
+    daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id, daxa::BufferId specs_id,
     daxa::ImageId workspace_id);
 void compressor_allocate_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &compressor_allocate_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId heap_id, daxa::BufferId specs_id,
+    daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id, daxa::BufferId specs_id,
     daxa::ImageId workspace_id);
 void compressor_write_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &compressor_write_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId heap_id, daxa::BufferId specs_id,
+    daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id, daxa::BufferId specs_id,
     daxa::ImageId workspace_id);
 void clear_workspace_task(daxa::Device &device, daxa::CommandList &cmd_list,
                           daxa::ImageId workspace_id);
@@ -110,6 +119,8 @@ static void cursor_position_callback(GLFWwindow *window, double x_pos,
   last_x_pos = x_pos;
   last_y_pos = y_pos;
 }
+
+#define GIGABYTE daxa_u32(1e+9)
 
 void mouse_button_callback(GLFWwindow *window, int button, int action,
                            int mods) {
@@ -178,7 +189,7 @@ int main() {
               return daxa::default_format_score(format);
             }
           },
-      .present_mode = daxa::PresentMode::FIFO,
+      .present_mode = daxa::PresentMode::IMMEDIATE,
       .image_usage = daxa::ImageUsageFlagBits::TRANSFER_DST,
       .debug_name = "my swapchain",
   });
@@ -199,22 +210,39 @@ int main() {
       .debug_name = "my pipeline manager",
   });
 
-  std::shared_ptr<daxa::RasterPipeline> raytrace_pipeline;
+daxa::ImageId depth_image = device.create_image({
+        .format = daxa::Format::D24_UNORM_S8_UINT,
+        .aspect = daxa::ImageAspectFlagBits::DEPTH | daxa::ImageAspectFlagBits::STENCIL,
+        .size = {window_info.width, window_info.height, 1},
+        .usage = daxa::ImageUsageFlagBits::DEPTH_STENCIL_ATTACHMENT,
+    });
+     
+   
+
+  std::shared_ptr<daxa::RasterPipeline> raytrace_front_pipeline;
+  std::shared_ptr<daxa::RasterPipeline> raytrace_back_pipeline;
   {
     auto result = pipeline_manager.add_raster_pipeline(
         {.vertex_shader_info =
              {.source = daxa::ShaderFile{"raytrace.glsl"},
               .compile_options = {.defines = {daxa::ShaderDefine{
-                                      "RAYTRACE_VERT"}}}},
+                                      "RAYTRACE_VERT"}, daxa::ShaderDefine{
+                                                "RAYTRACE_FRONT", "true"}}}},
          .fragment_shader_info =
              {.source = daxa::ShaderFile{"raytrace.glsl"},
               .compile_options = {.defines = {daxa::ShaderDefine{
                                       "RAYTRACE_FRAG"}}}},
          .color_attachments = {{.format = swapchain.get_format()}},
+         .depth_test = {
+                .depth_attachment_format = daxa::Format::D24_UNORM_S8_UINT,
+                .enable_depth_test = true,
+                .enable_depth_write = true,
+            },
          .raster =
              {
+                .face_culling = daxa::FaceCullFlagBits::BACK_BIT,
                  .front_face_winding =
-                     daxa::FrontFaceWinding::COUNTER_CLOCKWISE,
+                     daxa::FrontFaceWinding::COUNTER_CLOCKWISE
              },
          .push_constant_size = sizeof(RaytraceDrawPush),
          .debug_name = "my pipeline"});
@@ -222,23 +250,94 @@ int main() {
       std::cerr << result.message() << std::endl;
       return -1;
     }
-    raytrace_pipeline = result.value();
+    raytrace_front_pipeline = result.value();
+  }
+  {
+    auto result = pipeline_manager.add_raster_pipeline(
+        {.vertex_shader_info =
+             {.source = daxa::ShaderFile{"raytrace.glsl"},
+              .compile_options = {.defines = {daxa::ShaderDefine{
+                                      "RAYTRACE_VERT"}, daxa::ShaderDefine{
+                                                "RAYTRACE_FRONT", "false"}}}},
+         .fragment_shader_info =
+             {.source = daxa::ShaderFile{"raytrace.glsl"},
+              .compile_options = {.defines = {daxa::ShaderDefine{
+                                      "RAYTRACE_FRAG"}}}},
+         .color_attachments = {{.format = swapchain.get_format()}},
+         .depth_test = {
+                .depth_attachment_format = daxa::Format::D24_UNORM_S8_UINT,
+                .enable_depth_test = true,
+                .enable_depth_write = true,
+                .depth_test_compare_op = daxa::CompareOp::ALWAYS,
+            },
+         .raster =
+             {
+                .face_culling = daxa::FaceCullFlagBits::FRONT_BIT,
+                 .front_face_winding =
+                     daxa::FrontFaceWinding::COUNTER_CLOCKWISE
+               
+             },
+         .push_constant_size = sizeof(RaytraceDrawPush),
+         .debug_name = "my pipeline"});
+    if (result.is_err()) {
+      std::cerr << result.message() << std::endl;
+      return -1;
+    }
+    raytrace_back_pipeline = result.value();
   }
 
-  std::shared_ptr<daxa::ComputePipeline> prepare_pipeline;
-  {
+    std::shared_ptr<daxa::ComputePipeline> uniformity_pipelines[5];
+  for(daxa_u32 i = 0; i < 5; i++) {
+    daxa_u32 uniformity_size = pow(2, i + 1);
+    daxa_u32 uniformity_invoke_size = std::clamp(uniformity_size, daxa_u32(2), daxa_u32(8));
     auto result = pipeline_manager.add_compute_pipeline({
-        .shader_info = {.source = daxa::ShaderFile{"raytrace.glsl"},
-                        .compile_options = {.defines = {daxa::ShaderDefine{
-                                                "RAYTRACE_PREPARE"}}}},
+        .shader_info = {.source = daxa::ShaderFile{"uniformity.glsl"},
+                        .compile_options = {.defines = {
+                            daxa::ShaderDefine{
+                                                "UNIFORMITY_SIZE", std::to_string(uniformity_size)
+                                                },
+                            daxa::ShaderDefine{
+                                                "UNIFORMITY_INVOKE_SIZE", std::to_string(uniformity_invoke_size)
+                                                }}}},
         .push_constant_size = sizeof(RaytracePreparePush),
-        .debug_name = "prepare_pipeline",
+        .debug_name = "uniformity_pipeline",
     });
     if (result.is_err()) {
       std::cerr << result.message() << std::endl;
       return -1;
     }
-    prepare_pipeline = result.value();
+    uniformity_pipelines[i] = result.value();
+  }
+
+  std::shared_ptr<daxa::ComputePipeline> prepare_back_pipeline;
+  std::shared_ptr<daxa::ComputePipeline> prepare_front_pipeline;
+  {
+    auto result = pipeline_manager.add_compute_pipeline({
+        .shader_info = {.source = daxa::ShaderFile{"raytrace.glsl"},
+                        .compile_options = {.defines = {daxa::ShaderDefine{
+                                                "RAYTRACE_PREPARE_BACK"}}}},
+        .push_constant_size = sizeof(RaytracePreparePush),
+        .debug_name = "prepare_back_pipeline",
+    });
+    if (result.is_err()) {
+      std::cerr << result.message() << std::endl;
+      return -1;
+    }
+    prepare_back_pipeline = result.value();
+  }
+  {
+    auto result = pipeline_manager.add_compute_pipeline({
+        .shader_info = {.source = daxa::ShaderFile{"raytrace.glsl"},
+                        .compile_options = {.defines = {daxa::ShaderDefine{
+                                                "RAYTRACE_PREPARE_FRONT"}}}},
+        .push_constant_size = sizeof(RaytracePreparePush),
+        .debug_name = "prepare_front_pipeline",
+    });
+    if (result.is_err()) {
+      std::cerr << result.message() << std::endl;
+      return -1;
+    }
+    prepare_front_pipeline = result.value();
   }
 
   std::shared_ptr<daxa::ComputePipeline> queue_pipeline;
@@ -328,14 +427,43 @@ int main() {
       .debug_name = "volume",
   });
 
+  auto allocator_buffer = device.create_buffer({
+      .size = sizeof(Allocator),
+      .debug_name = "allocator",
+  });
+
   auto heap_buffer = device.create_buffer({
-      .size = sizeof(Heap),
+      .size = GIGABYTE,
       .debug_name = "heap",
   });
+
+  auto heap_id = device.get_device_address(heap_buffer);
+
+  auto regions_buffer = device.create_buffer({
+      .size = sizeof(Regions),
+      .debug_name = "regions",
+  });
+
+  auto regions_array_buffer = device.create_buffer({
+      .size = GIGABYTE,
+      .debug_name = "regions_array",
+  });
+
+  auto regions_array_id = device.get_device_address(regions_array_buffer);
 
   auto specs_buffer = device.create_buffer({
       .size = sizeof(Specs),
       .debug_name = "specs",
+  });
+
+auto unispecs_buffer = device.create_buffer({
+      .size = sizeof(UniSpecs),
+      .debug_name = "unispecs",
+  });
+
+  auto raytrace_specs_buffer = device.create_buffer({
+      .size = sizeof(RaytraceSpecs),
+      .debug_name = "raytrace_pecs",
   });
 
   auto write_indirect_buffer = device.create_buffer({
@@ -385,10 +513,25 @@ int main() {
        .debug_name = "my task buffer"});
   loop_task_list.add_runtime_buffer(task_specs_buffer, specs_buffer);
 
-  auto task_heap_buffer = loop_task_list.create_task_buffer(
+ auto task_unispecs_buffer = loop_task_list.create_task_buffer(
       {.initial_access = daxa::AccessConsts::COMPUTE_SHADER_READ,
        .debug_name = "my task buffer"});
-  loop_task_list.add_runtime_buffer(task_heap_buffer, heap_buffer);
+  loop_task_list.add_runtime_buffer(task_unispecs_buffer, unispecs_buffer);
+
+ auto task_raytrace_specs_buffer = loop_task_list.create_task_buffer(
+      {.initial_access = daxa::AccessConsts::COMPUTE_SHADER_READ,
+       .debug_name = "my task buffer"});
+  loop_task_list.add_runtime_buffer(task_raytrace_specs_buffer, raytrace_specs_buffer);
+
+  auto task_allocator_buffer = loop_task_list.create_task_buffer(
+      {.initial_access = daxa::AccessConsts::COMPUTE_SHADER_READ,
+       .debug_name = "my task buffer"});
+  loop_task_list.add_runtime_buffer(task_allocator_buffer, allocator_buffer);
+
+   auto task_regions_buffer = loop_task_list.create_task_buffer(
+      {.initial_access = daxa::AccessConsts::COMPUTE_SHADER_READ,
+       .debug_name = "my task buffer"});
+  loop_task_list.add_runtime_buffer(task_regions_buffer, regions_buffer);
 
   auto task_write_indirect_buffer = loop_task_list.create_task_buffer(
       {.initial_access = daxa::AccessConsts::COMPUTE_SHADER_READ,
@@ -405,24 +548,50 @@ int main() {
       {.debug_name = "my task swapchain image"});
   loop_task_list.add_runtime_image(task_workspace_image, workspace_image);
 
+  auto task_depth_image = loop_task_list.create_task_image(
+      {.debug_name = "my task swapchain image"});
+  loop_task_list.add_runtime_image(task_depth_image, depth_image);
+
   Perframe perframe;
+
+
+ loop_task_list.add_task({
+    .used_buffers = {{task_regions_buffer,
+                        daxa::TaskBufferAccess::TRANSFER_WRITE},
+                       {task_allocator_buffer,
+                        daxa::TaskBufferAccess::TRANSFER_WRITE}},
+      .task =
+          [task_regions_buffer, task_allocator_buffer, regions_array_id, heap_id](daxa::TaskRuntimeInterface task_runtime) {
+            auto cmd_list = task_runtime.get_command_list();
+
+            
+                upload_allocator_task(task_runtime.get_device(), cmd_list, task_runtime.get_buffers(task_allocator_buffer)[0], heap_id);
+                upload_regions_task(task_runtime.get_device(), cmd_list, task_runtime.get_buffers(task_regions_buffer)[0], regions_array_id);
+          },
+      .debug_name = "my draw task",
+  });
 
   loop_task_list.add_task({
       .used_buffers = {{task_volume_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
+                        {task_regions_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
                        {task_specs_buffer,
-                        daxa::TaskBufferAccess::COMPUTE_SHADER_WRITE_ONLY}},
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_WRITE_ONLY},
+                        {task_unispecs_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE}},
       .task =
-          [task_volume_buffer, task_heap_buffer, task_specs_buffer,
-           task_workspace_image,
+          [task_volume_buffer, task_regions_buffer, task_allocator_buffer, task_specs_buffer,
+           task_workspace_image, task_unispecs_buffer,
            &queue_pipeline](daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
 
             queue_task(task_runtime.get_device(), cmd_list, queue_pipeline,
+                       task_runtime.get_buffers(task_regions_buffer)[0],
                        task_runtime.get_buffers(task_volume_buffer)[0],
-                       task_runtime.get_buffers(task_heap_buffer)[0],
+                       task_runtime.get_buffers(task_allocator_buffer)[0],
                        task_runtime.get_buffers(task_specs_buffer)[0],
-                       task_runtime.get_images(task_workspace_image)[0]);
+                       task_runtime.get_buffers(task_unispecs_buffer)[0]);
           },
       .debug_name = "my draw task",
   });
@@ -454,14 +623,14 @@ int main() {
                daxa::ImageMipArraySlice{}},
           },
       .task =
-          [task_volume_buffer, task_heap_buffer, task_specs_buffer,
+          [task_volume_buffer, task_allocator_buffer, task_specs_buffer,
            task_workspace_image,
            &brush_pipeline](daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
 
             brush_task(task_runtime.get_device(), cmd_list, brush_pipeline,
                        task_runtime.get_buffers(task_volume_buffer)[0],
-                       task_runtime.get_buffers(task_heap_buffer)[0],
+                       task_runtime.get_buffers(task_allocator_buffer)[0],
                        task_runtime.get_buffers(task_specs_buffer)[0],
                        task_runtime.get_images(task_workspace_image)[0]);
           },
@@ -471,6 +640,8 @@ int main() {
   loop_task_list.add_task({
       .used_buffers = {{task_volume_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
+                    {task_regions_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
                        {task_specs_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_ONLY}},
       .used_images =
@@ -480,7 +651,7 @@ int main() {
                daxa::ImageMipArraySlice{}},
           },
       .task =
-          [task_volume_buffer, task_heap_buffer, task_specs_buffer,
+          [task_volume_buffer, task_regions_buffer, task_allocator_buffer, task_specs_buffer,
            task_workspace_image, &compressor_palettize_pipeline](
               daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
@@ -488,8 +659,9 @@ int main() {
             compressor_palettize_task(
                 task_runtime.get_device(), cmd_list,
                 compressor_palettize_pipeline,
+                task_runtime.get_buffers(task_regions_buffer)[0],
                 task_runtime.get_buffers(task_volume_buffer)[0],
-                task_runtime.get_buffers(task_heap_buffer)[0],
+                task_runtime.get_buffers(task_allocator_buffer)[0],
                 task_runtime.get_buffers(task_specs_buffer)[0],
                 task_runtime.get_images(task_workspace_image)[0]);
           },
@@ -499,7 +671,9 @@ int main() {
   loop_task_list.add_task({
       .used_buffers = {{task_volume_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
-                       {task_heap_buffer,
+                    {task_regions_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
+                       {task_allocator_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
                        {task_specs_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_ONLY}},
@@ -510,7 +684,7 @@ int main() {
                daxa::ImageMipArraySlice{}},
           },
       .task =
-          [task_volume_buffer, task_heap_buffer, task_specs_buffer,
+          [task_volume_buffer,  task_regions_buffer,task_allocator_buffer, task_specs_buffer,
            task_workspace_image, &compressor_allocate_pipeline](
               daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
@@ -518,8 +692,9 @@ int main() {
             compressor_allocate_task(
                 task_runtime.get_device(), cmd_list,
                 compressor_allocate_pipeline,
+                task_runtime.get_buffers(task_regions_buffer)[0],
                 task_runtime.get_buffers(task_volume_buffer)[0],
-                task_runtime.get_buffers(task_heap_buffer)[0],
+                task_runtime.get_buffers(task_allocator_buffer)[0],
                 task_runtime.get_buffers(task_specs_buffer)[0],
                 task_runtime.get_images(task_workspace_image)[0]);
           },
@@ -528,7 +703,9 @@ int main() {
   loop_task_list.add_task({
       .used_buffers = {{task_volume_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_ONLY},
-                       {task_heap_buffer,
+                    {task_regions_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_ONLY},
+                       {task_allocator_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_WRITE_ONLY},
                        {task_specs_buffer,
                         daxa::TaskBufferAccess::COMPUTE_SHADER_READ_ONLY}},
@@ -539,15 +716,39 @@ int main() {
                daxa::ImageMipArraySlice{}},
           },
       .task =
-          [task_volume_buffer, task_heap_buffer, task_specs_buffer,
+          [task_volume_buffer,  task_regions_buffer, task_allocator_buffer, task_specs_buffer,
            task_workspace_image, &compressor_write_pipeline](
               daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
 
             compressor_write_task(
                 task_runtime.get_device(), cmd_list, compressor_write_pipeline,
+                task_runtime.get_buffers(task_regions_buffer)[0],
                 task_runtime.get_buffers(task_volume_buffer)[0],
-                task_runtime.get_buffers(task_heap_buffer)[0],
+                task_runtime.get_buffers(task_allocator_buffer)[0],
+                task_runtime.get_buffers(task_specs_buffer)[0],
+                task_runtime.get_images(task_workspace_image)[0]);
+          },
+      .debug_name = "my draw task",
+  });
+   loop_task_list.add_task({
+      .used_buffers = {{task_unispecs_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
+                    {task_regions_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE},
+                       {task_allocator_buffer,
+                        daxa::TaskBufferAccess::COMPUTE_SHADER_READ_ONLY}},
+      .task =
+          [task_unispecs_buffer, task_regions_buffer, task_allocator_buffer, task_specs_buffer,
+           task_workspace_image, uniformity_pipelines](
+              daxa::TaskRuntimeInterface task_runtime) {
+            auto cmd_list = task_runtime.get_command_list();
+
+            uniformity_task(
+                task_runtime.get_device(), cmd_list, &*uniformity_pipelines,
+                task_runtime.get_buffers(task_regions_buffer)[0],
+                task_runtime.get_buffers(task_unispecs_buffer)[0],
+                task_runtime.get_buffers(task_allocator_buffer)[0],
                 task_runtime.get_buffers(task_specs_buffer)[0],
                 task_runtime.get_images(task_workspace_image)[0]);
           },
@@ -568,23 +769,29 @@ int main() {
           },
       .debug_name = "my draw task",
   });
-
+  
   loop_task_list.add_task({
       .used_buffers =
           {
+            {task_perframe_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
               {task_write_indirect_buffer,
-               daxa::TaskBufferAccess::SHADER_READ_WRITE},
+               daxa::TaskBufferAccess::SHADER_WRITE_ONLY},
               {task_volume_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+              {task_regions_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+              {task_raytrace_specs_buffer, daxa::TaskBufferAccess::SHADER_READ_WRITE},
           },
       .task =
-          [task_write_indirect_buffer, task_volume_buffer, &raytrace_pipeline,
-           &prepare_pipeline,
+          [task_write_indirect_buffer,task_regions_buffer, task_perframe_buffer, task_volume_buffer, task_raytrace_specs_buffer,
+           &prepare_front_pipeline,
            &window_info](daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
 
             raytrace_prepare_task(
-                task_runtime.get_device(), cmd_list, prepare_pipeline,
+                task_runtime.get_device(), cmd_list, prepare_front_pipeline,
+                task_runtime.get_buffers(task_regions_buffer)[0],
+                task_runtime.get_buffers(task_perframe_buffer)[0],
                 task_runtime.get_buffers(task_volume_buffer)[0],
+                task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
                 task_runtime.get_buffers(task_write_indirect_buffer)[0]);
           },
       .debug_name = "my draw task",
@@ -596,8 +803,7 @@ int main() {
                        {task_indirect_buffer,
                         daxa::TaskBufferAccess::TRANSFER_WRITE}},
       .task =
-          [task_write_indirect_buffer, task_indirect_buffer, &raytrace_pipeline,
-           &prepare_pipeline,
+          [task_write_indirect_buffer, task_indirect_buffer,
            &window_info](daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
 
@@ -614,8 +820,9 @@ int main() {
   loop_task_list.add_task({
       .used_buffers =
           {{task_perframe_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
-           {task_volume_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
-           {task_heap_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+           {task_raytrace_specs_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+              {task_regions_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+           {task_allocator_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
            {task_indirect_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY}},
       .used_images =
           {
@@ -623,23 +830,106 @@ int main() {
                daxa::ImageMipArraySlice{}},
           },
       .task =
-          [task_swapchain_image, task_perframe_buffer, task_indirect_buffer,
-           task_volume_buffer, task_heap_buffer, &raytrace_pipeline,
-           &prepare_pipeline,
+          [task_swapchain_image, task_regions_buffer,task_perframe_buffer, task_indirect_buffer, task_depth_image,
+           task_raytrace_specs_buffer, task_allocator_buffer, &raytrace_front_pipeline,
            &window_info](daxa::TaskRuntimeInterface task_runtime) {
             auto cmd_list = task_runtime.get_command_list();
 
             raytrace_draw_task(
-                task_runtime.get_device(), cmd_list, raytrace_pipeline,
+                task_runtime.get_device(), cmd_list, raytrace_front_pipeline,
+                daxa::AttachmentLoadOp::CLEAR,
+                task_runtime.get_buffers(task_regions_buffer)[0],
                 task_runtime.get_buffers(task_indirect_buffer)[0],
                 task_runtime.get_buffers(task_perframe_buffer)[0],
-                task_runtime.get_buffers(task_volume_buffer)[0],
-                task_runtime.get_buffers(task_heap_buffer)[0],
+                task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
+                task_runtime.get_buffers(task_allocator_buffer)[0],
                 task_runtime.get_images(task_swapchain_image)[0],
+                task_runtime.get_images(task_depth_image)[0],
                 window_info.width, window_info.height);
           },
       .debug_name = "my draw task",
   });
+  loop_task_list.add_task({
+      .used_buffers =
+          {
+            {task_perframe_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+              {task_write_indirect_buffer,
+               daxa::TaskBufferAccess::SHADER_WRITE_ONLY},
+              {task_regions_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+              {task_volume_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+              {task_raytrace_specs_buffer, daxa::TaskBufferAccess::SHADER_READ_WRITE},
+          },
+      .task =
+          [task_write_indirect_buffer,task_regions_buffer,task_perframe_buffer, task_volume_buffer, task_raytrace_specs_buffer,
+           &prepare_back_pipeline,
+           &window_info](daxa::TaskRuntimeInterface task_runtime) {
+            auto cmd_list = task_runtime.get_command_list();
+
+            raytrace_prepare_task(
+                task_runtime.get_device(), cmd_list, prepare_back_pipeline,
+                task_runtime.get_buffers(task_regions_buffer)[0],
+                task_runtime.get_buffers(task_perframe_buffer)[0],
+                task_runtime.get_buffers(task_volume_buffer)[0],
+                task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
+                task_runtime.get_buffers(task_write_indirect_buffer)[0]);
+          },
+      .debug_name = "my draw task",
+  });
+
+  loop_task_list.add_task({
+      .used_buffers = {{task_write_indirect_buffer,
+                        daxa::TaskBufferAccess::TRANSFER_READ},
+                       {task_indirect_buffer,
+                        daxa::TaskBufferAccess::TRANSFER_WRITE}},
+      .task =
+          [task_write_indirect_buffer, task_indirect_buffer,
+           &window_info](daxa::TaskRuntimeInterface task_runtime) {
+            auto cmd_list = task_runtime.get_command_list();
+
+            cmd_list.copy_buffer_to_buffer({
+                .src_buffer =
+                    task_runtime.get_buffers(task_write_indirect_buffer)[0],
+                .dst_buffer = task_runtime.get_buffers(task_indirect_buffer)[0],
+                .size = sizeof(DrawIndirect),
+            });
+          },
+      .debug_name = "my draw task",
+  });
+
+  loop_task_list.add_task({
+      .used_buffers =
+          {{task_perframe_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+           {task_raytrace_specs_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+              {task_regions_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+           {task_allocator_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY},
+           {task_indirect_buffer, daxa::TaskBufferAccess::SHADER_READ_ONLY}},
+      .used_images =
+          {
+              {task_swapchain_image, daxa::TaskImageAccess::COLOR_ATTACHMENT,
+               daxa::ImageMipArraySlice{}},
+          },
+      .task =
+          [task_swapchain_image, task_regions_buffer,task_perframe_buffer, task_indirect_buffer, task_depth_image,
+           task_raytrace_specs_buffer, task_allocator_buffer, &raytrace_back_pipeline,
+           &window_info](daxa::TaskRuntimeInterface task_runtime) {
+            auto cmd_list = task_runtime.get_command_list();
+
+            raytrace_draw_task(
+                task_runtime.get_device(), cmd_list, raytrace_back_pipeline,
+                daxa::AttachmentLoadOp::LOAD,
+                task_runtime.get_buffers(task_regions_buffer)[0],
+                task_runtime.get_buffers(task_indirect_buffer)[0],
+                task_runtime.get_buffers(task_perframe_buffer)[0],
+                task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
+                task_runtime.get_buffers(task_allocator_buffer)[0],
+                task_runtime.get_images(task_swapchain_image)[0],
+                task_runtime.get_images(task_depth_image)[0],
+                window_info.width, window_info.height);
+          },
+      .debug_name = "my draw task",
+  });
+
+
 
   auto submit_info = daxa::CommandSubmitInfo{};
   loop_task_list.submit(&submit_info);
@@ -647,7 +937,7 @@ int main() {
   loop_task_list.present({});
   loop_task_list.complete();
 
-  glm::vec3 translation = glm::vec3(0.0, 0.0, 10.0);
+  glm::vec3 translation = glm::vec3(0.0, 0.0, 3);
   glm::vec2 rotation = glm::vec2(0.0);
 
   std::chrono::milliseconds last_tick =
@@ -749,6 +1039,15 @@ int main() {
     }
 
     if (window_info.swapchain_out_of_date) {
+        loop_task_list.remove_runtime_image(task_depth_image, depth_image);
+        device.destroy_image(depth_image);
+            depth_image = device.create_image({
+                .format = daxa::Format::D24_UNORM_S8_UINT,
+                .aspect = daxa::ImageAspectFlagBits::DEPTH | daxa::ImageAspectFlagBits::STENCIL,
+                .size = {window_info.width, window_info.height, 1},
+                .usage = daxa::ImageUsageFlagBits::DEPTH_STENCIL_ATTACHMENT,
+            });
+            loop_task_list.add_runtime_image(task_depth_image, depth_image);
       swapchain.resize();
       window_info.swapchain_out_of_date = false;
     }
@@ -769,22 +1068,26 @@ int main() {
   device.destroy_buffer(perframe_buffer);
   device.destroy_buffer(volume_buffer);
   device.destroy_buffer(specs_buffer);
-  device.destroy_buffer(heap_buffer);
+  device.destroy_buffer(allocator_buffer);
   device.destroy_buffer(write_indirect_buffer);
   device.destroy_buffer(indirect_buffer);
   device.destroy_image(workspace_image);
+  device.destroy_image(depth_image);
   device.collect_garbage();
 }
 
 void raytrace_prepare_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &prepare_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId write_indirect_id) {
+    daxa::BufferId regions_id, daxa::BufferId perframe_id, daxa::BufferId volume_id, daxa::BufferId raytrace_specs_id, daxa::BufferId write_indirect_id) {
 
   cmd_list.set_pipeline(*prepare_pipeline);
   cmd_list.push_constant(RaytracePreparePush{
       .volume = device.get_device_address(volume_id),
+            .regions = device.get_device_address(regions_id),
+      .perframe = device.get_device_address(perframe_id),
       .indirect = device.get_device_address(write_indirect_id),
+      .raytrace_specs = device.get_device_address(raytrace_specs_id)
   });
   cmd_list.dispatch(1, 1, 1);
 }
@@ -792,32 +1095,81 @@ void raytrace_prepare_task(
 void raytrace_draw_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::RasterPipeline> &raytrace_pipeline,
-    daxa::BufferId indirect_id, daxa::BufferId perframe_id,
-    daxa::BufferId volume_id, daxa::BufferId heap_id,
-    daxa::ImageId swapchain_image, daxa::u32 width, daxa::u32 height) {
+    daxa::AttachmentLoadOp load_op,
+    daxa::BufferId regions_id, daxa::BufferId indirect_id, daxa::BufferId perframe_id,
+    daxa::BufferId raytrace_specs_id, daxa::BufferId allocator_id,
+    daxa::ImageId swapchain_image, daxa::ImageId depth_image, daxa::u32 width, daxa::u32 height) {
 
   cmd_list.begin_renderpass({
       .color_attachments =
           {
               {
                   .image_view = swapchain_image.default_view(),
-                  .load_op = daxa::AttachmentLoadOp::CLEAR,
+                  .load_op = load_op,
                   .clear_value =
                       std::array<daxa::f32, 4>{0.0f, 0.0f, 0.0f, 1.0f},
               },
           },
+           .depth_attachment = {{
+                        .image_view = depth_image.default_view(),
+                        .load_op = load_op,
+                        .clear_value = daxa::DepthValue{1.0f, 0},
+                    }},
       .render_area = {.x = 0, .y = 0, .width = width, .height = height},
   });
 
   cmd_list.set_pipeline(*raytrace_pipeline);
 
   cmd_list.push_constant(
-      RaytraceDrawPush{.volume = device.get_device_address(volume_id),
+      RaytraceDrawPush{.raytrace_specs = device.get_device_address(raytrace_specs_id),
+            .regions = device.get_device_address(regions_id),
                        .perframe = device.get_device_address(perframe_id),
-                       .heap = device.get_device_address(heap_id)});
+                       .allocator = device.get_device_address(allocator_id)});
 
   cmd_list.draw_indirect({.draw_command_buffer = indirect_id});
   cmd_list.end_renderpass();
+}
+
+void upload_allocator_task(daxa::Device &device, daxa::CommandList &cmd_list,
+                          daxa::BufferId buffer_id, daxa::BufferDeviceAddress heap_id) {
+  auto staging_buffer_id = device.create_buffer({
+      .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+      .size = sizeof(daxa::BufferDeviceAddress),
+      .debug_name = "my staging buffer",
+  });
+
+  cmd_list.destroy_buffer_deferred(staging_buffer_id);
+
+  auto *buffer_ptr = device.get_host_address_as<daxa::BufferDeviceAddress>(staging_buffer_id);
+  *buffer_ptr = heap_id;
+
+  cmd_list.copy_buffer_to_buffer({
+      .src_buffer = staging_buffer_id,
+      .dst_buffer = buffer_id,
+      .dst_offset = offsetof(Allocator, heap),
+      .size = sizeof(daxa::BufferDeviceAddress)
+  });
+}
+
+void upload_regions_task(daxa::Device &device, daxa::CommandList &cmd_list,
+                          daxa::BufferId buffer_id, daxa::BufferDeviceAddress regions_id) {
+  auto staging_buffer_id = device.create_buffer({
+      .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+      .size = sizeof(daxa::BufferDeviceAddress),
+      .debug_name = "my staging buffer",
+  });
+
+  cmd_list.destroy_buffer_deferred(staging_buffer_id);
+
+  auto *buffer_ptr = device.get_host_address_as<daxa::BufferDeviceAddress>(staging_buffer_id);
+  *buffer_ptr = regions_id;
+
+  cmd_list.copy_buffer_to_buffer({
+      .src_buffer = staging_buffer_id,
+      .dst_buffer = buffer_id,
+      .dst_offset = offsetof(Regions, data),
+      .size = sizeof(daxa::BufferDeviceAddress)
+  });
 }
 
 void upload_perframe_task(daxa::Device &device, daxa::CommandList &cmd_list,
@@ -848,19 +1200,21 @@ void clear_workspace_task(daxa::Device &device, daxa::CommandList &cmd_list,
 
 void queue_task(daxa::Device &device, daxa::CommandList &cmd_list,
                 std::shared_ptr<daxa::ComputePipeline> &queue_pipeline,
-                daxa::BufferId volume_id, daxa::BufferId heap_id,
-                daxa::BufferId specs_id, daxa::ImageId workspace_id) {
+                daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id,
+                daxa::BufferId specs_id,daxa::BufferId unispecs_id) {
   cmd_list.set_pipeline(*queue_pipeline);
   cmd_list.push_constant(QueuePush{
       .volume = device.get_device_address(volume_id),
+      .regions = device.get_device_address(regions_id),
       .specs = device.get_device_address(specs_id),
+      .unispecs = device.get_device_address(unispecs_id),
   });
   cmd_list.dispatch(1, 1, 1);
 }
 
 void brush_task(daxa::Device &device, daxa::CommandList &cmd_list,
                 std::shared_ptr<daxa::ComputePipeline> &brush_pipeline,
-                daxa::BufferId volume_id, daxa::BufferId heap_id,
+                daxa::BufferId volume_id, daxa::BufferId allocator_id,
                 daxa::BufferId specs_id, daxa::ImageId workspace_id) {
 
   cmd_list.set_pipeline(*brush_pipeline);
@@ -872,17 +1226,35 @@ void brush_task(daxa::Device &device, daxa::CommandList &cmd_list,
                     AXIS_WORKSPACE_SIZE);
 }
 
+void uniformity_task(daxa::Device &device, daxa::CommandList &cmd_list,
+                const std::shared_ptr<daxa::ComputePipeline>* uniformity_pipelines,
+                daxa::BufferId regions_id, daxa::BufferId unispecs_id, daxa::BufferId allocator_id,
+                daxa::BufferId specs_id, daxa::ImageId workspace_id)
+{
+    for(daxa_u32 i = 0; i < 5; i++) {
+        daxa_u32 uniformity_invoke_size = std::clamp(daxa_u32(pow(2, i + 1)), daxa_u32(2), daxa_u32(8));
+        cmd_list.set_pipeline(*uniformity_pipelines[i]);
+        cmd_list.push_constant(UniformityPush{
+            .unispecs = device.get_device_address(unispecs_id),
+            .regions = device.get_device_address(regions_id),
+            .allocator = device.get_device_address(allocator_id)
+        });
+        cmd_list.dispatch(AXIS_REGION_SIZE * AXIS_CHUNK_SIZE / uniformity_invoke_size,AXIS_REGION_SIZE * AXIS_CHUNK_SIZE / uniformity_invoke_size,AXIS_REGION_SIZE * AXIS_CHUNK_SIZE / uniformity_invoke_size);
+    }
+}
+
 void compressor_palettize_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &compressor_palettize_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId heap_id, daxa::BufferId specs_id,
+    daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id, daxa::BufferId specs_id,
     daxa::ImageId workspace_id) {
   cmd_list.set_pipeline(*compressor_palettize_pipeline);
   cmd_list.push_constant(
       CompressorPush{.workspace = workspace_id,
                      .specs = device.get_device_address(specs_id),
                      .volume = device.get_device_address(volume_id),
-                     .heap = device.get_device_address(heap_id)});
+                     .regions = device.get_device_address(regions_id),
+                     .allocator = device.get_device_address(allocator_id)});
   cmd_list.dispatch(AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE,
                     AXIS_WORKSPACE_SIZE);
 }
@@ -890,7 +1262,7 @@ void compressor_palettize_task(
 void compressor_allocate_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &compressor_allocate_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId heap_id, daxa::BufferId specs_id,
+    daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id, daxa::BufferId specs_id,
     daxa::ImageId workspace_id) {
 
   cmd_list.set_pipeline(*compressor_allocate_pipeline);
@@ -898,7 +1270,8 @@ void compressor_allocate_task(
       CompressorPush{.workspace = workspace_id,
                      .specs = device.get_device_address(specs_id),
                      .volume = device.get_device_address(volume_id),
-                     .heap = device.get_device_address(heap_id)});
+                     .regions = device.get_device_address(regions_id),
+                     .allocator = device.get_device_address(allocator_id)});
   cmd_list.dispatch(AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE,
                     AXIS_WORKSPACE_SIZE);
 }
@@ -906,14 +1279,15 @@ void compressor_allocate_task(
 void compressor_write_task(
     daxa::Device &device, daxa::CommandList &cmd_list,
     std::shared_ptr<daxa::ComputePipeline> &compressor_write_pipeline,
-    daxa::BufferId volume_id, daxa::BufferId heap_id, daxa::BufferId specs_id,
+    daxa::BufferId regions_id, daxa::BufferId volume_id, daxa::BufferId allocator_id, daxa::BufferId specs_id,
     daxa::ImageId workspace_id) {
   cmd_list.set_pipeline(*compressor_write_pipeline);
   cmd_list.push_constant(
       CompressorPush{.workspace = workspace_id,
                      .specs = device.get_device_address(specs_id),
                      .volume = device.get_device_address(volume_id),
-                     .heap = device.get_device_address(heap_id)});
+                     .regions = device.get_device_address(regions_id),
+                     .allocator = device.get_device_address(allocator_id)});
   cmd_list.dispatch(AXIS_WORKSPACE_SIZE, AXIS_WORKSPACE_SIZE,
                     AXIS_WORKSPACE_SIZE);
 }

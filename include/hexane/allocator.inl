@@ -1,15 +1,10 @@
-#ifdef DAXA_SHADER
+#pragma once
 
-#include <hexane/heap.inl>
+#include <daxa/daxa.inl>
 
-daxa_u32 shader_malloc(daxa_u32 size) {
-    daxa_u32 result_address = atomicAdd(deref(push.heap).offset, size + 2);
-    //SIZE as the beginning
-    deref(push.heap).data[result_address] = size + 2;
-    //DEADBEEF at the end
-    deref(push.heap).data[result_address + size + 1] = 3735928559;
+struct Allocator {
+    daxa_u32 heap_offset;
+    daxa_BufferPtr(daxa_u32) heap;
+};
 
-    return result_address + 1;
-}
-
-#endif
+DAXA_ENABLE_BUFFER_PTR(Allocator)

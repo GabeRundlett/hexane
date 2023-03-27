@@ -6,6 +6,24 @@
 #include <bit>
 #endif
 
+#ifdef DAXA_SHADER
+float map(daxa_f32 value, daxa_f32 in_min, daxa_f32 in_max, daxa_f32 out_min, daxa_f32 out_max) {
+  return out_min + (out_max - out_min) * (value - in_min) / (in_max - in_min);
+}
+
+vec2 map(daxa_f32vec2 value, daxa_f32vec2 in_min, daxa_f32vec2 in_max, daxa_f32vec2 out_min, daxa_f32vec2 out_max) {
+  return out_min + (out_max - out_min) * (value - in_min) / (in_max - in_min);
+}
+
+vec3 map(daxa_f32vec3 value, daxa_f32vec3 in_min, daxa_f32vec3 in_max, daxa_f32vec3 out_min, daxa_f32vec3 out_max) {
+  return out_min + (out_max - out_min) * (value - in_min) / (in_max - in_min);
+}
+
+vec4 map(daxa_f32vec4 value, daxa_f32vec4 in_min, daxa_f32vec4 in_max, daxa_f32vec4 out_min, daxa_f32vec4 out_max) {
+  return out_min + (out_max - out_min) * (value - in_min) / (in_max - in_min);
+}
+#endif
+
 daxa_u32 three_d_to_one_d(daxa_u32vec3 p, daxa_u32vec3 max) {
     return (p.z * max.x * max.y) + (p.y * max.x) + p.x;
 }

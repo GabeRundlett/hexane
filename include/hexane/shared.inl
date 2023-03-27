@@ -4,9 +4,9 @@
 
 #include <hexane/constants.inl>
 #include <hexane/volume.inl>
-#include <hexane/heap.inl>
 #include <hexane/push.inl>
 #include <hexane/perframe.inl>
+#include <hexane/allocator.inl>
 #include <hexane/specs.inl>
 #include <hexane/util.inl>
 #include <hexane/blocks.inl>
