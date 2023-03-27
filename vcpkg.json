@@ -2,7 +2,12 @@
 	"name": "hexane",
 	"version": "0.1.0",
 	"dependencies": [
-		"daxa",
+		{
+			"name": "daxa",
+			"features": [
+				"utils-fsr2"
+			]
+		},
 		"glfw3",
 		"glm"
 	],
