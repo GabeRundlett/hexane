@@ -25,4 +25,4 @@
 
 #define AXIS_WORLD_SIZE 512
 
-#define PREPASS_SCALE 2
+#define PREPASS_SCALE 1
