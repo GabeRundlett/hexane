@@ -260,7 +260,7 @@ int main() {
          .color_attachments = {{.format = swapchain.get_format()}},
          .depth_test =
              {
-                 .depth_attachment_format = daxa::Format::D24_UNORM_S8_UINT,
+                 .depth_attachment_format = daxa::Format::D32_SFLOAT,
                  .enable_depth_test = true,
                  .enable_depth_write = true,
              },
@@ -289,7 +289,7 @@ int main() {
          .color_attachments = {{.format = swapchain.get_format()}},
          .depth_test =
              {
-                 .depth_attachment_format = daxa::Format::D24_UNORM_S8_UINT,
+                 .depth_attachment_format = daxa::Format::D32_SFLOAT,
                  .enable_depth_test = true,
                  .enable_depth_write = true,
                  .depth_test_compare_op = daxa::CompareOp::ALWAYS,
@@ -619,7 +619,7 @@ int main() {
                 task_runtime.get_buffers(task_regions_buffer)[0],
                 regions_array_id);
           },
-      .debug_name = "my draw task",
+      .debug_name = "upload allocator and regions task",
   });
 
   loop_task_list.add_task({
@@ -644,7 +644,7 @@ int main() {
                        task_runtime.get_buffers(task_specs_buffer)[0],
                        task_runtime.get_buffers(task_unispecs_buffer)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "queue task",
   });
 
   loop_task_list.add_task({
@@ -661,7 +661,7 @@ int main() {
                 task_runtime.get_device(), cmd_list,
                 task_runtime.get_images(task_workspace_image)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "clear workspace task",
   });
 
   loop_task_list.add_task({
@@ -685,7 +685,7 @@ int main() {
                        task_runtime.get_buffers(task_specs_buffer)[0],
                        task_runtime.get_images(task_workspace_image)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "brush task",
   });
 
   loop_task_list.add_task({
@@ -717,7 +717,7 @@ int main() {
                 task_runtime.get_buffers(task_specs_buffer)[0],
                 task_runtime.get_images(task_workspace_image)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "compressor palettize task",
   });
 
   loop_task_list.add_task({
@@ -751,7 +751,7 @@ int main() {
                 task_runtime.get_buffers(task_specs_buffer)[0],
                 task_runtime.get_images(task_workspace_image)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "compressor allocate task (part 2)",
   });
   loop_task_list.add_task({
       .used_buffers = {{task_volume_buffer,
@@ -782,7 +782,7 @@ int main() {
                 task_runtime.get_buffers(task_specs_buffer)[0],
                 task_runtime.get_images(task_workspace_image)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "compressor write task (part 3)",
   });
   loop_task_list.add_task({
       .used_buffers = {{task_unispecs_buffer,
@@ -805,7 +805,7 @@ int main() {
                             task_runtime.get_buffers(task_specs_buffer)[0],
                             task_runtime.get_images(task_workspace_image)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "uniformity task",
   });
 
   loop_task_list.add_task({
@@ -820,7 +820,7 @@ int main() {
                 task_runtime.get_device(), cmd_list,
                 task_runtime.get_buffers(task_perframe_buffer)[0], perframe);
           },
-      .debug_name = "my draw task",
+      .debug_name = "upload perframe task",
   });
 
   loop_task_list.add_task({
@@ -849,7 +849,7 @@ int main() {
                 task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
                 task_runtime.get_buffers(task_write_indirect_buffer)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "raytrace prepare task",
   });
 
   loop_task_list.add_task({
@@ -869,7 +869,7 @@ int main() {
                 .size = sizeof(DrawIndirect),
             });
           },
-      .debug_name = "my draw task",
+      .debug_name = "copy write_indirect to indirect",
   });
 
   loop_task_list.add_task({
@@ -885,8 +885,8 @@ int main() {
               {task_swapchain_image, daxa::TaskImageAccess::COLOR_ATTACHMENT,
                daxa::ImageMipArraySlice{}},
               {task_depth_image,
-               daxa::TaskImageAccess::DEPTH_STENCIL_ATTACHMENT,
-               daxa::ImageMipArraySlice{}},
+               daxa::TaskImageAccess::DEPTH_ATTACHMENT,
+               daxa::ImageMipArraySlice{.image_aspect = daxa::ImageAspectFlagBits::DEPTH}},
           },
       .task =
           [task_swapchain_image, task_regions_buffer, task_perframe_buffer,
@@ -908,7 +908,7 @@ int main() {
                 window_info.width / PREPASS_SCALE,
                 window_info.height / PREPASS_SCALE);
           },
-      .debug_name = "my draw task",
+      .debug_name = "raytrace draw task",
   });
   loop_task_list.add_task({
       .used_buffers =
@@ -936,7 +936,7 @@ int main() {
                 task_runtime.get_buffers(task_raytrace_specs_buffer)[0],
                 task_runtime.get_buffers(task_write_indirect_buffer)[0]);
           },
-      .debug_name = "my draw task",
+      .debug_name = "raytrace prepare task (2nd)",
   });
 
   loop_task_list.add_task({
@@ -956,7 +956,7 @@ int main() {
                 .size = sizeof(DrawIndirect),
             });
           },
-      .debug_name = "my draw task",
+      .debug_name = "copy write_indirect to indirect (2nd)",
   });
 
   loop_task_list.add_task({
@@ -972,8 +972,8 @@ int main() {
               {task_swapchain_image, daxa::TaskImageAccess::COLOR_ATTACHMENT,
                daxa::ImageMipArraySlice{}},
               {task_depth_image,
-               daxa::TaskImageAccess::DEPTH_STENCIL_ATTACHMENT,
-               daxa::ImageMipArraySlice{}},
+               daxa::TaskImageAccess::DEPTH_ATTACHMENT,
+               daxa::ImageMipArraySlice{.image_aspect = daxa::ImageAspectFlagBits::DEPTH}},
           },
       .task =
           [task_swapchain_image, task_regions_buffer, task_perframe_buffer,
@@ -995,7 +995,7 @@ int main() {
                 window_info.width / PREPASS_SCALE,
                 window_info.height / PREPASS_SCALE);
           },
-      .debug_name = "my draw task",
+      .debug_name = "raytrace draw (2nd)",
   });
 
   daxa_f32 delta_time = 0.0;
@@ -1275,18 +1275,18 @@ void create_images(daxa::Device &device, daxa::u32 width, daxa::u32 height,
   });
 
   depth_image = device.create_image({
-      .format = daxa::Format::D24_UNORM_S8_UINT,
+      .format = daxa::Format::D32_SFLOAT,
       .aspect =
-          daxa::ImageAspectFlagBits::DEPTH | daxa::ImageAspectFlagBits::STENCIL,
+          daxa::ImageAspectFlagBits::DEPTH,
       .size = {width, height, 1},
-      .usage = daxa::ImageUsageFlagBits::DEPTH_STENCIL_ATTACHMENT,
+      .usage = daxa::ImageUsageFlagBits::DEPTH_STENCIL_ATTACHMENT | daxa::ImageUsageFlagBits::SHADER_READ_ONLY | daxa::ImageUsageFlagBits::TRANSFER_DST,
   });
 
   motion_vectors_image = device.create_image({
       .format = daxa::Format::R32G32_SFLOAT,
       .aspect = daxa::ImageAspectFlagBits::COLOR,
       .size = {width, height, 1},
-      .usage = daxa::ImageUsageFlagBits::COLOR_ATTACHMENT,
+      .usage = daxa::ImageUsageFlagBits::COLOR_ATTACHMENT | daxa::ImageUsageFlagBits::SHADER_READ_ONLY,
   });
 }
 
